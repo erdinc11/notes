@@ -5,6 +5,7 @@ import { useGSAP } from '@gsap/react';
 import { ArchiveRestore, ArrowLeft, Bold, Check, CheckSquare, ChevronDown, FileText, Italic, Link2, Lock, Moon, MoreHorizontal, Paperclip, Pin, Plus, Search, Settings2, Sun, Trash2, Undo2, Unlock, X } from 'lucide-react';
 import { db, getAnonymousUser, isFirebaseConfigured } from './firebase';
 import { deriveKey, decryptJson, encryptJson, hashPassword } from './crypto';
+import { SWIPE_ACTION_WIDTH, clampSwipeOffset, swipeSettlesOpen } from './swipe';
 import { collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query, setDoc } from 'firebase/firestore';
 import './styles.css';
 
@@ -242,12 +243,82 @@ function unlinkElement(link) {
   link.remove();
 }
 
-function NoteCard({ note, selected, onSelect }) {
+function NoteCard({ note, selected, swipeOpen, onSelect, onSwipeOpen, onDelete }) {
   const preview = plainText(note.content) || 'Yeni not';
-  return <button className={`note-card ${selected ? 'is-selected' : ''}`} onClick={() => onSelect(note.id)}>
-    <span className="note-card-top"><span className="note-card-title">{note.title || 'Başlıksız not'}</span><span className="note-card-icons">{note.locked && <Lock size={13} />}{note.pinned && <Pin size={13} fill="currentColor" />}</span></span>
-    <span className="note-card-meta">{formatDate(note.updatedAt)} · {preview}</span>
-  </button>;
+  const [offset, setOffset] = useState(swipeOpen ? -SWIPE_ACTION_WIDTH : 0);
+  const [isDragging, setIsDragging] = useState(false);
+  const gesture = useRef(null);
+  const offsetRef = useRef(swipeOpen ? -SWIPE_ACTION_WIDTH : 0);
+  const wheelTimer = useRef(null);
+  const ignoreClick = useRef(false);
+
+  useEffect(() => {
+    if (!isDragging) {
+      const nextOffset = swipeOpen ? -SWIPE_ACTION_WIDTH : 0;
+      offsetRef.current = nextOffset;
+      setOffset(nextOffset);
+    }
+  }, [isDragging, swipeOpen]);
+  useEffect(() => () => window.clearTimeout(wheelTimer.current), []);
+
+  const finishSwipe = (event, cancelled = false) => {
+    const currentGesture = gesture.current;
+    if (!currentGesture) return;
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    gesture.current = null;
+    setIsDragging(false);
+    const shouldOpen = !cancelled && currentGesture.dragged && swipeSettlesOpen(currentGesture.offset);
+    ignoreClick.current = currentGesture.dragged;
+    offsetRef.current = shouldOpen ? -SWIPE_ACTION_WIDTH : 0;
+    setOffset(offsetRef.current);
+    onSwipeOpen(shouldOpen ? note.id : null);
+  };
+
+  const handlePointerDown = (event) => {
+    if (event.button !== 0) return;
+    gesture.current = { x: event.clientX, y: event.clientY, startOffset: swipeOpen ? -SWIPE_ACTION_WIDTH : 0, offset: swipeOpen ? -SWIPE_ACTION_WIDTH : 0, dragged: false };
+  };
+  const handlePointerMove = (event) => {
+    const currentGesture = gesture.current;
+    if (!currentGesture) return;
+    const deltaX = event.clientX - currentGesture.x;
+    const deltaY = event.clientY - currentGesture.y;
+    if (!currentGesture.dragged) {
+      if (Math.abs(deltaX) < 6) return;
+      if (Math.abs(deltaY) > Math.abs(deltaX)) { gesture.current = null; return; }
+      currentGesture.dragged = true;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      setIsDragging(true);
+    }
+    event.preventDefault();
+    currentGesture.offset = clampSwipeOffset(currentGesture.startOffset + deltaX);
+    offsetRef.current = currentGesture.offset;
+    setOffset(currentGesture.offset);
+  };
+  const handleWheel = (event) => {
+    if (Math.abs(event.deltaX) < 2 || Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+    event.preventDefault();
+    window.clearTimeout(wheelTimer.current);
+    setIsDragging(true);
+    onSwipeOpen(note.id);
+    offsetRef.current = clampSwipeOffset(offsetRef.current - event.deltaX);
+    setOffset(offsetRef.current);
+    wheelTimer.current = window.setTimeout(() => {
+      const shouldOpen = swipeSettlesOpen(offsetRef.current);
+      offsetRef.current = shouldOpen ? -SWIPE_ACTION_WIDTH : 0;
+      setOffset(offsetRef.current);
+      setIsDragging(false);
+      onSwipeOpen(shouldOpen ? note.id : null);
+    }, 140);
+  };
+
+  return <div className="note-swipe-row" style={{ '--swipe-offset': `${offset}px`, '--swipe-reveal': `${-offset}px` }} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={finishSwipe} onPointerCancel={(event) => finishSwipe(event, true)} onWheel={handleWheel}>
+    <button className="note-delete-action" type="button" onClick={() => { if (ignoreClick.current) { ignoreClick.current = false; return; } onDelete(note.id); }} aria-label={`${note.title || 'Başlıksız not'} notunu sil`}><Trash2 size={18} /><span>Sil</span></button>
+    <button className={`note-card ${selected ? 'is-selected' : ''} ${isDragging ? 'is-dragging' : ''} ${offset < 0 ? 'is-offset' : ''}`} type="button" onKeyDown={(event) => { if (event.key === 'Escape' && swipeOpen) { offsetRef.current = 0; setOffset(0); onSwipeOpen(null); } }} onClick={() => { if (ignoreClick.current) { ignoreClick.current = false; return; } onSelect(note.id); }}>
+      <span className="note-card-top"><span className="note-card-title">{note.title || 'Başlıksız not'}</span><span className="note-card-icons">{note.locked && <Lock size={13} />}{note.pinned && <Pin size={13} fill="currentColor" />}</span></span>
+      <span className="note-card-meta">{formatDate(note.updatedAt)} · {preview}</span>
+    </button>
+  </div>;
 }
 function ToolbarButton({ label, onClick, active, children }) { return <button className={`toolbar-button ${active ? 'is-active' : ''}`} aria-label={label} title={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick}>{children}</button>; }
 
@@ -257,7 +328,7 @@ function App() {
   const [unlockError, setUnlockError] = useState(''); const [notes, setNotes] = useState([]); const [selectedId, setSelectedId] = useState(null);
   const [search, setSearch] = useState(''); const [view, setView] = useState('notes'); const [showSettings, setShowSettings] = useState(false); const [showInfo, setShowInfo] = useState(false);
   const [mobileList, setMobileList] = useState(true); const [notice, setNotice] = useState(''); const [previewImage, setPreviewImage] = useState(''); const [notePasswordModal, setNotePasswordModal] = useState(null); const [isSaving, setIsSaving] = useState(false); const [isLoading, setIsLoading] = useState(true); const [loadError, setLoadError] = useState('');
-  const [title, setTitle] = useState(''); const [content, setContent] = useState(blankContent); const [linkContextMenu, setLinkContextMenu] = useState(null);
+  const [title, setTitle] = useState(''); const [content, setContent] = useState(blankContent); const [linkContextMenu, setLinkContextMenu] = useState(null); const [swipedNoteId, setSwipedNoteId] = useState(null);
   const editorRef = useRef(null); const titleRef = useRef(null); const appRef = useRef(null); const fileRef = useRef(null); const saveTimer = useRef(null); const noteKeys = useRef(new Map());
   const selectedNote = notes.find((note) => note.id === selectedId) || null;
   const activeNotes = useMemo(() => sortNotes(notes.filter((note) => note.deleted === (view === 'trash'))).filter((note) => { const needle = search.trim().toLocaleLowerCase('tr-TR'); return !needle || `${note.title} ${plainText(note.content)}`.toLocaleLowerCase('tr-TR').includes(needle); }), [notes, search, view]);
@@ -337,9 +408,10 @@ function App() {
     return () => { document.removeEventListener('pointerdown', closeMenu); document.removeEventListener('keydown', closeOnEscape); };
   }, []);
   useEffect(() => { if (isUnlocked && selectedId && title === '' && titleRef.current) titleRef.current.focus(); }, [isUnlocked, selectedId, title]);
+  useEffect(() => { setSwipedNoteId(null); }, [view, search]);
   useGSAP(() => {
     if (!isUnlocked) return;
-    gsap.fromTo('.note-card', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .42, stagger: .035, ease: 'power2.out' });
+    gsap.fromTo('.note-swipe-row', { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: .42, stagger: .035, ease: 'power2.out' });
     gsap.fromTo('.editor-shell', { opacity: 0, x: 16 }, { opacity: 1, x: 0, duration: .6, ease: 'power3.out' });
   }, { scope: appRef, dependencies: [isUnlocked, view, search] });
 
@@ -375,7 +447,29 @@ function App() {
     if (await hashPassword(value) !== note.notePasswordHash) return 'Şifre hatalı.';
     try { const derived = await deriveKey(value, note.noteSalt); const decoded = await decryptJson(note.encrypted, derived.key); noteKeys.current.set(note.id, derived.key); setNotes((current) => current.map((item) => item.id === note.id ? { ...item, ...decoded } : item)); setSelectedId(note.id); setMobileList(false); setShowInfo(false); setNotePasswordModal(null); return ''; } catch { return 'Not açılamadı. Şifreyi kontrol et.'; }
   };
-  const deleteSelected = async (permanent = false) => { if (!selectedNote) return; if (!permanent) await mutateSelected({ deleted: true, pinned: false }); else if (!isFirebaseConfigured) writeLocalNotes(notes.filter((note) => note.id !== selectedNote.id)); else await deleteDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', selectedNote.id)); setNotes((current) => current.filter((note) => note.id !== selectedNote.id)); setSelectedId(null); setMobileList(true); setShowInfo(false); };
+  const deleteNote = async (id, permanent = false) => {
+    const note = notes.find((item) => item.id === id);
+    if (!note) return;
+    if (selectedId === id) { window.clearTimeout(saveTimer.current); await saveCurrent(); }
+    setSwipedNoteId(null);
+    try {
+      if (permanent) {
+        if (!isFirebaseConfigured) writeLocalNotes(notes.filter((item) => item.id !== id));
+        else await deleteDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', id));
+        setNotes((current) => current.filter((item) => item.id !== id));
+      } else {
+        const next = { ...note, deleted: true, pinned: false, updatedAt: Date.now() };
+        if (!isFirebaseConfigured) writeLocalNotes(notes.map((item) => item.id === id ? next : item));
+        else await setDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', id), { deleted: true, pinned: false, updatedAt: next.updatedAt }, { merge: true });
+        setNotes((current) => current.map((item) => item.id === id ? next : item));
+      }
+    } catch {
+      showNotice('Not silinemedi.');
+      return;
+    }
+    if (selectedId === id) { noteKeys.current.delete(id); setSelectedId(null); setMobileList(true); setShowInfo(false); }
+  };
+  const deleteSelected = async (permanent = false) => { if (selectedNote) await deleteNote(selectedNote.id, permanent); };
   const handleUnlock = async (event) => { event.preventDefault(); if (!settings || !passwordInput) return; if (await hashPassword(passwordInput) !== settings.passwordHash) { setUnlockError('Şifre hatalı.'); return; } const derived = await deriveKey(passwordInput, settings.salt || undefined); setPassword(passwordInput); setCryptoKey(derived.key); setIsUnlocked(true); writeSessionUnlock(passwordInput); setUnlockError(''); };
   const changePassword = async (nextPassword) => {
     const normalized = nextPassword.trim(); if (normalized.length < 4) { showNotice('Şifre en az 4 karakter olmalı.'); return false; }
@@ -492,7 +586,7 @@ function App() {
     <aside className={`notes-panel ${mobileList ? 'mobile-visible' : ''}`}><header className="panel-header"><div><p className="eyebrow">Not defteri</p><h2>{view === 'trash' ? 'Çöp kutusu' : 'Notlar'}</h2></div><div className="header-actions"><button className="icon-button" onClick={createNote} aria-label="Yeni not" title="Yeni not"><Plus size={20} /></button><button className="icon-button" onClick={() => setShowSettings(true)} aria-label="Ayarlar" title="Ayarlar"><Settings2 size={18} /></button></div></header>
       <div className="search-wrap"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Notlarda ara" aria-label="Notlarda ara" /></div>
       <div className="view-switcher"><button className={view === 'notes' ? 'active' : ''} onClick={async () => { await releaseSelectedNoteLock(); setView('notes'); setSelectedId(null); }}>Tüm notlar <span>{notes.filter((n) => !n.deleted).length}</span></button><button className={view === 'trash' ? 'active' : ''} onClick={async () => { await releaseSelectedNoteLock(); setView('trash'); setSelectedId(null); }}><Trash2 size={15} /> Çöp kutusu <span>{notes.filter((n) => n.deleted).length}</span></button></div>
-      <div className="notes-list">{activeNotes.length ? activeNotes.map((note) => <NoteCard key={note.id} note={note} selected={note.id === selectedId} onSelect={chooseNote} />) : <div className="empty-list"><FileText size={30} /><p>{search ? 'Eşleşen not yok.' : view === 'trash' ? 'Çöp kutusu boş.' : 'İlk notunu oluştur.'}</p></div>}</div>
+      <div className="notes-list">{activeNotes.length ? activeNotes.map((note) => <NoteCard key={note.id} note={note} selected={note.id === selectedId} swipeOpen={note.id === swipedNoteId} onSelect={(id) => { setSwipedNoteId(null); chooseNote(id); }} onSwipeOpen={setSwipedNoteId} onDelete={(id) => deleteNote(id, view === 'trash')} />) : <div className="empty-list"><FileText size={30} /><p>{search ? 'Eşleşen not yok.' : view === 'trash' ? 'Çöp kutusu boş.' : 'İlk notunu oluştur.'}</p></div>}</div>
       <footer className="panel-footer"><span className={`sync-dot ${isSaving ? 'is-syncing' : ''}`} />{isFirebaseConfigured ? (isSaving ? 'Firebase ile eşitleniyor' : 'Firebase ile eşitlendi') : 'Yerel demo modu'}</footer>
     </aside>
     <section className={`editor-shell ${mobileList ? 'mobile-hidden' : ''}`}>
