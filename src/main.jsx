@@ -12,7 +12,7 @@ const LOCAL_NOTES = 'notlar.local.notes';
 const LOCAL_SETTINGS = 'notlar.local.settings';
 const DEFAULT_PASSWORD = '1234';
 const blankContent = '<p><br></p>';
-const DEFAULT_EDITOR_PREFERENCES = { editorFontSize: 20, editorLineHeight: 1.2, paragraphSpacing: 16 };
+const DEFAULT_EDITOR_PREFERENCES = { editorFontSize: 20, editorLineHeight: 1.2, paragraphSpacing: 16, titleFontSize: 54, titleLetterSpacing: -0.07 };
 const SINGLE_USER_ID = 'private-notes';
 const SESSION_UNLOCK = 'notlar.session.unlock';
 
@@ -319,10 +319,15 @@ function App() {
     const lineHeight = Number(settings.editorLineHeight);
     const normalizedLineHeight = Number.isFinite(lineHeight) ? lineHeight : DEFAULT_EDITOR_PREFERENCES.editorLineHeight;
     const paragraphSpacing = Number(settings.paragraphSpacing ?? DEFAULT_EDITOR_PREFERENCES.paragraphSpacing);
+    const titleFontSize = Number(settings.titleFontSize) || DEFAULT_EDITOR_PREFERENCES.titleFontSize;
+    const titleLetterSpacing = Number(settings.titleLetterSpacing);
+    const normalizedTitleLetterSpacing = Number.isFinite(titleLetterSpacing) ? titleLetterSpacing : DEFAULT_EDITOR_PREFERENCES.titleLetterSpacing;
     document.documentElement.style.setProperty('--editor-font-size', `${fontSize}px`);
     document.documentElement.style.setProperty('--editor-line-height', String(normalizedLineHeight));
     document.documentElement.style.setProperty('--paragraph-spacing', `${paragraphSpacing}px`);
     document.documentElement.style.setProperty('--editor-effective-line-height', `${(fontSize * normalizedLineHeight) + paragraphSpacing}px`);
+    document.documentElement.style.setProperty('--title-font-size', `${titleFontSize}px`);
+    document.documentElement.style.setProperty('--title-letter-spacing', `${normalizedTitleLetterSpacing}em`);
   }, [settings]);
   useEffect(() => { if (selectedNote) { setTitle(selectedNote.title || ''); setContent(selectedNote.content || blankContent); requestAnimationFrame(() => { if (editorRef.current) { editorRef.current.innerHTML = selectedNote.content || blankContent; normalizeEditorBodyBlocks(editorRef.current); syncCollapseBlocks(editorRef.current); syncChecklistItems(editorRef.current); } }); } }, [selectedId]);
   useEffect(() => {
@@ -504,14 +509,18 @@ function SettingsModal({ settings, onClose, onTheme, onPassword, onEditorPrefere
   const [editorFontSize, setEditorFontSize] = useState(String(settings.editorFontSize || DEFAULT_EDITOR_PREFERENCES.editorFontSize));
   const [editorLineHeight, setEditorLineHeight] = useState(String(settings.editorLineHeight ?? DEFAULT_EDITOR_PREFERENCES.editorLineHeight));
   const [paragraphSpacing, setParagraphSpacing] = useState(String(settings.paragraphSpacing ?? DEFAULT_EDITOR_PREFERENCES.paragraphSpacing));
+  const [titleFontSize, setTitleFontSize] = useState(String(settings.titleFontSize || DEFAULT_EDITOR_PREFERENCES.titleFontSize));
+  const [titleLetterSpacing, setTitleLetterSpacing] = useState(String(settings.titleLetterSpacing ?? DEFAULT_EDITOR_PREFERENCES.titleLetterSpacing));
   const submit = async (event) => { event.preventDefault(); if (nextPassword !== confirmPassword) { setError('Şifreler eşleşmiyor.'); return; } if (await onPassword(nextPassword)) { setNextPassword(''); setConfirmPassword(''); } };
-  const saveEditorPreferences = async (event) => { event.preventDefault(); const typedLineHeight = Number(editorLineHeight); const lineHeight = Number.isFinite(typedLineHeight) ? typedLineHeight : DEFAULT_EDITOR_PREFERENCES.editorLineHeight; setEditorLineHeight(String(lineHeight)); await onEditorPreferences({ editorFontSize: Number(editorFontSize), editorLineHeight: lineHeight, paragraphSpacing: Number(paragraphSpacing) }); };
+  const saveEditorPreferences = async (event) => { event.preventDefault(); const typedLineHeight = Number(editorLineHeight); const lineHeight = Number.isFinite(typedLineHeight) ? typedLineHeight : DEFAULT_EDITOR_PREFERENCES.editorLineHeight; const typedTitleLetterSpacing = Number(titleLetterSpacing); const normalizedTitleLetterSpacing = Number.isFinite(typedTitleLetterSpacing) ? typedTitleLetterSpacing : DEFAULT_EDITOR_PREFERENCES.titleLetterSpacing; setEditorLineHeight(String(lineHeight)); setTitleLetterSpacing(String(normalizedTitleLetterSpacing)); await onEditorPreferences({ editorFontSize: Number(editorFontSize), editorLineHeight: lineHeight, paragraphSpacing: Number(paragraphSpacing), titleFontSize: Number(titleFontSize), titleLetterSpacing: normalizedTitleLetterSpacing }); };
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="settings-modal">
       <header><div><p className="eyebrow">Not defteri</p><h2>Ayarlar</h2></div><button className="icon-button" onClick={onClose} aria-label="Kapat"><X size={19} /></button></header>
       <div className="settings-row"><div><strong>Görünüm</strong><span>Not defterinin renk temasını seç.</span></div><button className="theme-toggle" onClick={onTheme}>{settings.theme === 'dark' ? <><Moon size={17} /> Koyu</> : <><Sun size={17} /> Açık</>}</button></div>
       <form className="editor-preferences" onSubmit={saveEditorPreferences}>
-        <div><strong>Yazı düzeni</strong><span>Bu seçimler tüm notların body metnine uygulanır.</span></div>
+        <div><strong>Yazı düzeni</strong><span>Bu seçimler tüm notların metin ve başlık görünümüne uygulanır.</span></div>
+        <label>Başlık boyutu<select value={titleFontSize} onChange={(event) => setTitleFontSize(event.target.value)}><option value="40">Küçük — 40 px</option><option value="48">Orta — 48 px</option><option value="54">Normal — 54 px</option><option value="60">Büyük — 60 px</option><option value="68">Çok büyük — 68 px</option></select></label>
+        <div className="line-spacing-control"><div className="line-spacing-title"><span>Başlık harf aralığı</span><output>{Number.isFinite(Number(titleLetterSpacing)) ? `${Number(titleLetterSpacing).toFixed(2)} em` : '—'}</output></div><div className="line-spacing-inputs"><input type="number" step="0.01" value={titleLetterSpacing} onChange={(event) => setTitleLetterSpacing(event.target.value)} aria-label="Başlık harf aralığı değeri" /></div><span className="line-spacing-help">Negatif değerler harfleri yaklaştırır, pozitif değerler uzaklaştırır. Örnek: -0.07, 0.00 veya 0.04.</span></div>
         <label>Metin boyutu<select value={editorFontSize} onChange={(event) => setEditorFontSize(event.target.value)}><option value="16">Küçük — 16 px</option><option value="18">Orta — 18 px</option><option value="20">Normal — 20 px</option><option value="22">Büyük — 22 px</option><option value="24">Çok büyük — 24 px</option></select></label>
         <div className="line-spacing-control"><div className="line-spacing-title"><span>Satır aralığı</span><output>{Number.isFinite(Number(editorLineHeight)) ? `${Number(editorLineHeight).toFixed(2)}×` : '—'}</output></div><div className="line-spacing-inputs"><input type="number" step="0.01" value={editorLineHeight} onChange={(event) => setEditorLineHeight(event.target.value)} aria-label="Satır aralığı değeri" /></div><span className="line-spacing-help">İstediğin değeri yazabilirsin; sınır yok. Örnek: 0.70, 1.20 veya 3.00.</span></div>
         <label>Ek satır boşluğu<select value={paragraphSpacing} onChange={(event) => setParagraphSpacing(event.target.value)}><option value="0">Yok</option><option value="8">Dar</option><option value="16">Normal</option><option value="24">Geniş</option></select></label>
