@@ -470,6 +470,19 @@ function App() {
     if (selectedId === id) { noteKeys.current.delete(id); setSelectedId(null); setMobileList(true); setShowInfo(false); }
   };
   const deleteSelected = async (permanent = false) => { if (selectedNote) await deleteNote(selectedNote.id, permanent); };
+  const emptyTrash = async () => {
+    const trashNotes = notes.filter((note) => note.deleted);
+    if (!trashNotes.length || !window.confirm(`Çöp kutusundaki ${trashNotes.length} not kalıcı olarak silinsin mi? Bu işlem geri alınamaz.`)) return;
+    if (selectedNote?.deleted) { window.clearTimeout(saveTimer.current); await saveCurrent(); }
+    setIsSaving(true);
+    try {
+      if (!isFirebaseConfigured) writeLocalNotes(notes.filter((note) => !note.deleted));
+      else await Promise.all(trashNotes.map((note) => deleteDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', note.id))));
+      setNotes((current) => current.filter((note) => !note.deleted));
+      if (selectedNote?.deleted) { noteKeys.current.delete(selectedNote.id); setSelectedId(null); setMobileList(true); setShowInfo(false); }
+      showNotice('Çöp kutusu boşaltıldı.');
+    } catch { showNotice('Çöp kutusu boşaltılamadı.'); } finally { setIsSaving(false); }
+  };
   const handleUnlock = async (event) => { event.preventDefault(); if (!settings || !passwordInput) return; if (await hashPassword(passwordInput) !== settings.passwordHash) { setUnlockError('Şifre hatalı.'); return; } const derived = await deriveKey(passwordInput, settings.salt || undefined); setPassword(passwordInput); setCryptoKey(derived.key); setIsUnlocked(true); writeSessionUnlock(passwordInput); setUnlockError(''); };
   const changePassword = async (nextPassword) => {
     const normalized = nextPassword.trim(); if (normalized.length < 4) { showNotice('Şifre en az 4 karakter olmalı.'); return false; }
@@ -583,7 +596,7 @@ function App() {
   if (!isUnlocked) return <main className="lock-screen"><div className="lock-orbit orbit-one" /><div className="lock-orbit orbit-two" /><form className="lock-card" onSubmit={handleUnlock}><div className="brand-mark">n</div><p className="eyebrow">Kişisel not alanın</p><h1>Fikirlerini sakla.<br /><em>Geri dön.</em></h1><p className="lock-copy">Notlarına ulaşmak için şifreni gir.</p><input autoFocus type="password" inputMode="numeric" value={passwordInput} onChange={(event) => setPasswordInput(event.target.value)} placeholder="Şifre" aria-label="Notlar şifresi" />{unlockError && <p className="form-error">{unlockError}</p>}<button className="primary-button" type="submit">Notları aç <Unlock size={16} /></button><span className="lock-hint">İlk kullanım şifresi: 1234</span></form></main>;
 
   return <main className="app-shell" ref={appRef}>
-    <aside className={`notes-panel ${mobileList ? 'mobile-visible' : ''}`}><header className="panel-header"><div><p className="eyebrow">Not defteri</p><h2>{view === 'trash' ? 'Çöp kutusu' : 'Notlar'}</h2></div><div className="header-actions"><button className="icon-button" onClick={createNote} aria-label="Yeni not" title="Yeni not"><Plus size={20} /></button><button className="icon-button" onClick={() => setShowSettings(true)} aria-label="Ayarlar" title="Ayarlar"><Settings2 size={18} /></button></div></header>
+    <aside className={`notes-panel ${mobileList ? 'mobile-visible' : ''}`}><header className="panel-header"><div><p className="eyebrow">Not defteri</p><h2>{view === 'trash' ? 'Çöp kutusu' : 'Notlar'}</h2></div><div className="header-actions">{view === 'trash' && notes.some((note) => note.deleted) && <button className="empty-trash-button" onClick={emptyTrash}><Trash2 size={15} /> Boşalt</button>}<button className="icon-button" onClick={createNote} aria-label="Yeni not" title="Yeni not"><Plus size={20} /></button><button className="icon-button" onClick={() => setShowSettings(true)} aria-label="Ayarlar" title="Ayarlar"><Settings2 size={18} /></button></div></header>
       <div className="search-wrap"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Notlarda ara" aria-label="Notlarda ara" /></div>
       <div className="view-switcher"><button className={view === 'notes' ? 'active' : ''} onClick={async () => { await releaseSelectedNoteLock(); setView('notes'); setSelectedId(null); }}>Tüm notlar <span>{notes.filter((n) => !n.deleted).length}</span></button><button className={view === 'trash' ? 'active' : ''} onClick={async () => { await releaseSelectedNoteLock(); setView('trash'); setSelectedId(null); }}><Trash2 size={15} /> Çöp kutusu <span>{notes.filter((n) => n.deleted).length}</span></button></div>
       <div className="notes-list">{activeNotes.length ? activeNotes.map((note) => <NoteCard key={note.id} note={note} selected={note.id === selectedId} swipeOpen={note.id === swipedNoteId} onSelect={(id) => { setSwipedNoteId(null); chooseNote(id); }} onSwipeOpen={setSwipedNoteId} onDelete={(id) => deleteNote(id, view === 'trash')} />) : <div className="empty-list"><FileText size={30} /><p>{search ? 'Eşleşen not yok.' : view === 'trash' ? 'Çöp kutusu boş.' : 'İlk notunu oluştur.'}</p></div>}</div>
