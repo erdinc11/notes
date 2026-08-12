@@ -11,6 +11,7 @@ import './styles.css';
 
 const LOCAL_NOTES = 'notlar.local.notes';
 const LOCAL_SETTINGS = 'notlar.local.settings';
+const LOCAL_LAST_OPEN_NOTE = 'notlar.local.last-open-note';
 const DEFAULT_PASSWORD = '1234';
 const blankContent = '<p><br></p>';
 const DEFAULT_EDITOR_PREFERENCES = { editorFontSize: 20, editorLineHeight: 1.2, paragraphSpacing: 16, titleFontSize: 54, titleLetterSpacing: -0.07 };
@@ -36,6 +37,9 @@ function readLocalNotes() { try { return JSON.parse(localStorage.getItem(LOCAL_N
 function readLocalSettings() { try { return JSON.parse(localStorage.getItem(LOCAL_SETTINGS) || '{}'); } catch { return {}; } }
 function writeLocalNotes(notes) { localStorage.setItem(LOCAL_NOTES, JSON.stringify(notes)); }
 function writeLocalSettings(settings) { localStorage.setItem(LOCAL_SETTINGS, JSON.stringify(settings)); }
+function readLastOpenNote() { try { return localStorage.getItem(LOCAL_LAST_OPEN_NOTE) || ''; } catch { return ''; } }
+function writeLastOpenNote(id) { try { localStorage.setItem(LOCAL_LAST_OPEN_NOTE, id); } catch {} }
+function clearLastOpenNote() { try { localStorage.removeItem(LOCAL_LAST_OPEN_NOTE); } catch {} }
 function normalizeSettings(settings) { return { ...DEFAULT_EDITOR_PREFERENCES, ...settings }; }
 function readSessionUnlock() { try { return sessionStorage.getItem(SESSION_UNLOCK) || ''; } catch { return ''; } }
 function writeSessionUnlock(value) { try { sessionStorage.setItem(SESSION_UNLOCK, value); } catch {} }
@@ -325,11 +329,11 @@ function ToolbarButton({ label, onClick, active, children }) { return <button cl
 function App() {
   const [user, setUser] = useState(null); const [settings, setSettings] = useState(null); const [password, setPassword] = useState('');
   const [passwordInput, setPasswordInput] = useState(''); const [isUnlocked, setIsUnlocked] = useState(false); const [cryptoKey, setCryptoKey] = useState(null); const [unlockRestoreChecked, setUnlockRestoreChecked] = useState(false);
-  const [unlockError, setUnlockError] = useState(''); const [notes, setNotes] = useState([]); const [selectedId, setSelectedId] = useState(null);
+  const [unlockError, setUnlockError] = useState(''); const [notes, setNotes] = useState([]); const [selectedId, setSelectedId] = useState(null); const [notesLoaded, setNotesLoaded] = useState(false);
   const [search, setSearch] = useState(''); const [view, setView] = useState('notes'); const [showSettings, setShowSettings] = useState(false); const [showInfo, setShowInfo] = useState(false);
   const [mobileList, setMobileList] = useState(true); const [notice, setNotice] = useState(''); const [previewImage, setPreviewImage] = useState(''); const [notePasswordModal, setNotePasswordModal] = useState(null); const [isSaving, setIsSaving] = useState(false); const [isLoading, setIsLoading] = useState(true); const [loadError, setLoadError] = useState('');
   const [title, setTitle] = useState(''); const [content, setContent] = useState(blankContent); const [linkContextMenu, setLinkContextMenu] = useState(null); const [swipedNoteId, setSwipedNoteId] = useState(null);
-  const editorRef = useRef(null); const titleRef = useRef(null); const appRef = useRef(null); const fileRef = useRef(null); const saveTimer = useRef(null); const noteKeys = useRef(new Map());
+  const editorRef = useRef(null); const titleRef = useRef(null); const appRef = useRef(null); const fileRef = useRef(null); const saveTimer = useRef(null); const noteKeys = useRef(new Map()); const lastOpenNoteId = useRef(readLastOpenNote()); const didRestoreLastOpenNote = useRef(false);
   const selectedNote = notes.find((note) => note.id === selectedId) || null;
   const activeNotes = useMemo(() => sortNotes(notes.filter((note) => note.deleted === (view === 'trash'))).filter((note) => { const needle = search.trim().toLocaleLowerCase('tr-TR'); return !needle || `${note.title} ${plainText(note.content)}`.toLocaleLowerCase('tr-TR').includes(needle); }), [notes, search, view]);
   const showNotice = useCallback((message) => { setNotice(message); window.clearTimeout(showNotice.timer); showNotice.timer = window.setTimeout(() => setNotice(''), 2600); }, []);
@@ -341,7 +345,7 @@ function App() {
       if (!isFirebaseConfigured) {
         const local = readLocalSettings();
         if (!local.passwordHash) { const initial = { passwordHash: await hashPassword(DEFAULT_PASSWORD), theme: 'light', salt: null, ...DEFAULT_EDITOR_PREFERENCES }; writeLocalSettings(initial); setSettings(initial); } else setSettings(normalizeSettings(local));
-        setNotes(readLocalNotes()); setIsLoading(false); return;
+        setNotes(readLocalNotes()); setNotesLoaded(true); setIsLoading(false); return;
       }
       const userRef = doc(db, 'users', SINGLE_USER_ID); const snapshot = await getDoc(userRef);
       if (snapshot.exists()) setSettings(normalizeSettings(snapshot.data())); else {
@@ -364,6 +368,7 @@ function App() {
           rows.push({ ...decoded, id: item.id, createdAt: toMillis(raw.createdAt), updatedAt: toMillis(raw.updatedAt) });
         }
         setNotes(rows);
+        setNotesLoaded(true);
       });
     }
     loadSettings().catch((error) => { setLoadError(error.code || error.message || 'Firebase erişimi reddedildi.'); setIsLoading(false); });
@@ -383,6 +388,22 @@ function App() {
     restoreUnlock();
     return () => { active = false; };
   }, [settings, unlockRestoreChecked]);
+  useEffect(() => {
+    if (!notesLoaded || !isUnlocked || didRestoreLastOpenNote.current) return;
+    didRestoreLastOpenNote.current = true;
+    const note = notes.find((item) => item.id === lastOpenNoteId.current);
+    if (!note) {
+      if (lastOpenNoteId.current) { clearLastOpenNote(); lastOpenNoteId.current = ''; }
+      return;
+    }
+    setView(note.deleted ? 'trash' : 'notes');
+    setMobileList(false);
+    if (note.locked && note.notePasswordHash && !noteKeys.current.has(note.id)) {
+      setNotePasswordModal({ mode: 'unlock', noteId: note.id });
+      return;
+    }
+    setSelectedId(note.id);
+  }, [isUnlocked, notes, notesLoaded]);
   useEffect(() => {
     if (!settings) return;
     document.documentElement.dataset.theme = settings.theme || 'light';
@@ -431,10 +452,11 @@ function App() {
     noteKeys.current.delete(selectedNote.id);
     setNotes((current) => current.map((note) => note.id === selectedNote.id ? { ...note, title: 'Kilitli not', content: '<p>Bu not şifreli.</p>' } : note));
   };
-  const createNote = async () => { await releaseSelectedNoteLock(); const newNote = makeNote(); setNotes((current) => [newNote, ...current]); setSelectedId(newNote.id); setView('notes'); setMobileList(false); if (!isFirebaseConfigured) writeLocalNotes([newNote, ...notes]); else await setDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', newNote.id), { ...newNote }); requestAnimationFrame(() => titleRef.current?.focus()); };
+  const createNote = async () => { await releaseSelectedNoteLock(); const newNote = makeNote(); setNotes((current) => [newNote, ...current]); setSelectedId(newNote.id); lastOpenNoteId.current = newNote.id; writeLastOpenNote(newNote.id); setView('notes'); setMobileList(false); if (!isFirebaseConfigured) writeLocalNotes([newNote, ...notes]); else await setDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', newNote.id), { ...newNote }); requestAnimationFrame(() => titleRef.current?.focus()); };
   const updateTitle = (value) => { setTitle(value); scheduleSave({ title: value }); };
   const updateContent = () => { if (!editorRef.current) return; normalizeEditorBodyBlocks(editorRef.current); syncCollapseBlocks(editorRef.current); syncChecklistItems(editorRef.current); const value = editorRef.current.innerHTML || blankContent; setContent(value); scheduleSave({ content: value }); };
-  const chooseNote = async (id) => { if (id !== selectedId) await releaseSelectedNoteLock(); const note = notes.find((item) => item.id === id); if (note?.locked && note.notePasswordHash && !noteKeys.current.has(id)) { setNotePasswordModal({ mode: 'unlock', noteId: id }); return; } setSelectedId(id); setMobileList(false); setShowInfo(false); };
+  const chooseNote = async (id) => { if (id !== selectedId) await releaseSelectedNoteLock(); const note = notes.find((item) => item.id === id); if (note?.locked && note.notePasswordHash && !noteKeys.current.has(id)) { setNotePasswordModal({ mode: 'unlock', noteId: id }); return; } setSelectedId(id); lastOpenNoteId.current = id; writeLastOpenNote(id); setMobileList(false); setShowInfo(false); };
+  const deselectNote = async () => { await releaseSelectedNoteLock(); setSelectedId(null); setSwipedNoteId(null); setShowInfo(false); };
   const mutateSelected = async (changes) => {
     if (!selectedNote) return; const next = { ...selectedNote, ...changes, updatedAt: Date.now() }; setNotes((current) => current.map((note) => note.id === next.id ? next : note));
     if (!isFirebaseConfigured) writeLocalNotes(notes.map((note) => note.id === next.id ? next : note));
@@ -445,7 +467,7 @@ function App() {
     const request = notePasswordModal; const note = notes.find((item) => item.id === request?.noteId); if (!request || !note) return 'Not bulunamadı.';
     if (request.mode === 'lock') { const derived = await deriveKey(value); noteKeys.current.set(note.id, derived.key); await mutateSelected({ locked: true, notePasswordHash: await hashPassword(value), noteSalt: derived.salt }); setNotePasswordModal(null); return ''; }
     if (await hashPassword(value) !== note.notePasswordHash) return 'Şifre hatalı.';
-    try { const derived = await deriveKey(value, note.noteSalt); const decoded = await decryptJson(note.encrypted, derived.key); noteKeys.current.set(note.id, derived.key); setNotes((current) => current.map((item) => item.id === note.id ? { ...item, ...decoded } : item)); setSelectedId(note.id); setMobileList(false); setShowInfo(false); setNotePasswordModal(null); return ''; } catch { return 'Not açılamadı. Şifreyi kontrol et.'; }
+    try { const derived = await deriveKey(value, note.noteSalt); const decoded = await decryptJson(note.encrypted, derived.key); noteKeys.current.set(note.id, derived.key); setNotes((current) => current.map((item) => item.id === note.id ? { ...item, ...decoded } : item)); setSelectedId(note.id); lastOpenNoteId.current = note.id; writeLastOpenNote(note.id); setMobileList(false); setShowInfo(false); setNotePasswordModal(null); return ''; } catch { return 'Not açılamadı. Şifreyi kontrol et.'; }
   };
   const deleteNote = async (id, permanent = false) => {
     const note = notes.find((item) => item.id === id);
@@ -457,6 +479,7 @@ function App() {
         if (!isFirebaseConfigured) writeLocalNotes(notes.filter((item) => item.id !== id));
         else await deleteDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', id));
         setNotes((current) => current.filter((item) => item.id !== id));
+        if (lastOpenNoteId.current === id) { clearLastOpenNote(); lastOpenNoteId.current = ''; }
       } else {
         const next = { ...note, deleted: true, pinned: false, updatedAt: Date.now() };
         if (!isFirebaseConfigured) writeLocalNotes(notes.map((item) => item.id === id ? next : item));
@@ -479,6 +502,7 @@ function App() {
       if (!isFirebaseConfigured) writeLocalNotes(notes.filter((note) => !note.deleted));
       else await Promise.all(trashNotes.map((note) => deleteDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', note.id))));
       setNotes((current) => current.filter((note) => !note.deleted));
+      if (trashNotes.some((note) => note.id === lastOpenNoteId.current)) { clearLastOpenNote(); lastOpenNoteId.current = ''; }
       if (selectedNote?.deleted) { noteKeys.current.delete(selectedNote.id); setSelectedId(null); setMobileList(true); setShowInfo(false); }
       showNotice('Çöp kutusu boşaltıldı.');
     } catch { showNotice('Çöp kutusu boşaltılamadı.'); } finally { setIsSaving(false); }
@@ -599,7 +623,7 @@ function App() {
     <aside className={`notes-panel ${mobileList ? 'mobile-visible' : ''}`}><header className="panel-header"><div><p className="eyebrow">Not defteri</p><h2>{view === 'trash' ? 'Çöp kutusu' : 'Notlar'}</h2></div><div className="header-actions">{view === 'trash' && notes.some((note) => note.deleted) && <button className="empty-trash-button" onClick={emptyTrash}><Trash2 size={15} /> Boşalt</button>}<button className="icon-button" onClick={createNote} aria-label="Yeni not" title="Yeni not"><Plus size={20} /></button><button className="icon-button" onClick={() => setShowSettings(true)} aria-label="Ayarlar" title="Ayarlar"><Settings2 size={18} /></button></div></header>
       <div className="search-wrap"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Notlarda ara" aria-label="Notlarda ara" /></div>
       <div className="view-switcher"><button className={view === 'notes' ? 'active' : ''} onClick={async () => { await releaseSelectedNoteLock(); setView('notes'); setSelectedId(null); }}>Tüm notlar <span>{notes.filter((n) => !n.deleted).length}</span></button><button className={view === 'trash' ? 'active' : ''} onClick={async () => { await releaseSelectedNoteLock(); setView('trash'); setSelectedId(null); }}><Trash2 size={15} /> Çöp kutusu <span>{notes.filter((n) => n.deleted).length}</span></button></div>
-      <div className="notes-list">{activeNotes.length ? activeNotes.map((note) => <NoteCard key={note.id} note={note} selected={note.id === selectedId} swipeOpen={note.id === swipedNoteId} onSelect={(id) => { setSwipedNoteId(null); chooseNote(id); }} onSwipeOpen={setSwipedNoteId} onDelete={(id) => deleteNote(id, view === 'trash')} />) : <div className="empty-list"><FileText size={30} /><p>{search ? 'Eşleşen not yok.' : view === 'trash' ? 'Çöp kutusu boş.' : 'İlk notunu oluştur.'}</p></div>}</div>
+      <div className="notes-list" onClick={(event) => { if (!event.target.closest?.('.note-swipe-row')) deselectNote(); }}>{activeNotes.length ? activeNotes.map((note) => <NoteCard key={note.id} note={note} selected={note.id === selectedId} swipeOpen={note.id === swipedNoteId} onSelect={(id) => { setSwipedNoteId(null); chooseNote(id); }} onSwipeOpen={setSwipedNoteId} onDelete={(id) => deleteNote(id, view === 'trash')} />) : <div className="empty-list"><FileText size={30} /><p>{search ? 'Eşleşen not yok.' : view === 'trash' ? 'Çöp kutusu boş.' : 'İlk notunu oluştur.'}</p></div>}</div>
       <footer className="panel-footer"><span className={`sync-dot ${isSaving ? 'is-syncing' : ''}`} />{isFirebaseConfigured ? (isSaving ? 'Firebase ile eşitleniyor' : 'Firebase ile eşitlendi') : 'Yerel demo modu'}</footer>
     </aside>
     <section className={`editor-shell ${mobileList ? 'mobile-hidden' : ''}`}>
