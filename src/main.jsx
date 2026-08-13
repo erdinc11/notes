@@ -453,6 +453,18 @@ function App() {
     setNotes((current) => current.map((note) => note.id === selectedNote.id ? { ...note, title: 'Kilitli not', content: '<p>Bu not şifreli.</p>' } : note));
   };
   const createNote = async () => { await releaseSelectedNoteLock(); const newNote = makeNote(); setNotes((current) => [newNote, ...current]); setSelectedId(newNote.id); lastOpenNoteId.current = newNote.id; writeLastOpenNote(newNote.id); setView('notes'); setMobileList(false); if (!isFirebaseConfigured) writeLocalNotes([newNote, ...notes]); else await setDoc(doc(db, 'users', SINGLE_USER_ID, 'notes', newNote.id), { ...newNote }); requestAnimationFrame(() => titleRef.current?.focus()); };
+  useEffect(() => {
+    const handleNewNoteShortcut = (event) => {
+      const modifierPressed = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      const isNewNoteShortcut = modifierPressed && !event.altKey && ((!event.shiftKey && key === 'n') || (event.shiftKey && key === 'o'));
+      if (!isNewNoteShortcut) return;
+      event.preventDefault();
+      if (isUnlocked && !event.repeat) createNote();
+    };
+    window.addEventListener('keydown', handleNewNoteShortcut, true);
+    return () => window.removeEventListener('keydown', handleNewNoteShortcut, true);
+  }, [createNote, isUnlocked]);
   const updateTitle = (value) => { setTitle(value); scheduleSave({ title: value }); };
   const updateContent = () => { if (!editorRef.current) return; normalizeEditorBodyBlocks(editorRef.current); syncCollapseBlocks(editorRef.current); syncChecklistItems(editorRef.current); const value = editorRef.current.innerHTML || blankContent; setContent(value); scheduleSave({ content: value }); };
   const chooseNote = async (id) => { if (id !== selectedId) await releaseSelectedNoteLock(); const note = notes.find((item) => item.id === id); if (note?.locked && note.notePasswordHash && !noteKeys.current.has(id)) { setNotePasswordModal({ mode: 'unlock', noteId: id }); return; } setSelectedId(id); lastOpenNoteId.current = id; writeLastOpenNote(id); setMobileList(false); setShowInfo(false); };
