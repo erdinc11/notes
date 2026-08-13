@@ -41,9 +41,9 @@ function readLastOpenNote() { try { return localStorage.getItem(LOCAL_LAST_OPEN_
 function writeLastOpenNote(id) { try { localStorage.setItem(LOCAL_LAST_OPEN_NOTE, id); } catch {} }
 function clearLastOpenNote() { try { localStorage.removeItem(LOCAL_LAST_OPEN_NOTE); } catch {} }
 function normalizeSettings(settings) { return { ...DEFAULT_EDITOR_PREFERENCES, ...settings }; }
-function readSessionUnlock() { try { return sessionStorage.getItem(SESSION_UNLOCK) || ''; } catch { return ''; } }
-function writeSessionUnlock(value) { try { sessionStorage.setItem(SESSION_UNLOCK, value); } catch {} }
-function clearSessionUnlock() { try { sessionStorage.removeItem(SESSION_UNLOCK); } catch {} }
+function readSessionUnlock() { try { return localStorage.getItem(SESSION_UNLOCK) || ''; } catch { return ''; } }
+function writeSessionUnlock(value) { try { localStorage.setItem(SESSION_UNLOCK, value); } catch {} }
+function clearSessionUnlock() { try { localStorage.removeItem(SESSION_UNLOCK); } catch {} }
 
 async function compressImage(file) {
   const source = await createImageBitmap(file); const canvas = document.createElement('canvas'); const max = 1024;
